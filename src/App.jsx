@@ -308,6 +308,8 @@ function CRMApp({ user, onLogout }) {
     setLoading(false);
   }, [isAdmin, user.id, user.token]);
 
+  useEffect(() => { loadData(); }, [loadData]);
+
   const toDb = (l) => ({
     id: l.id, name: l.name, instagram: l.instagram, category: l.category,
     source: l.source, stage: l.stage, notes: l.notes, owner: l.owner,
