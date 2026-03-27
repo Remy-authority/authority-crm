@@ -464,22 +464,22 @@ function CRMApp({ user, getToken, onLogout }) {
   const toggleSel = (id) => setSelected((prev) => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); return s; });
   const selAll = () => { if (selected.size === fil.length) setSelected(new Set()); else setSelected(new Set(fil.map((l) => l.id))); };
 
-  // ── Bulk delete ──
+  // ── Bulk delete (via Supabase RPC — single server-side operation) ──
   const bulkDel = async () => {
     const ids = [...selected];
     setLeads((prev) => prev.filter((l) => !selected.has(l.id)));
     setSelected(new Set());
     flash(ids.length + " supprimés...");
-    const tk = getToken();
     try {
-      // Supabase accepts comma-separated ids with 'in' operator — single request
-      const CHUNK = 200;
-      for (let i = 0; i < ids.length; i += CHUNK) {
-        const chunk = ids.slice(i, i + CHUNK);
-        const idList = chunk.map((id) => `"${id}"`).join(",");
-        await sbFetch("leads", { method: "DELETE", query: `?id=in.(${idList})` }, tk);
-      }
-      flash(ids.length + " supprimés ✓");
+      const tk = getToken();
+      const res = await fetch(`${SB_URL}/rest/v1/rpc/bulk_delete_leads`, {
+        method: "POST",
+        headers: { apikey: SB_KEY, Authorization: `Bearer ${tk}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ lead_ids: ids }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const deleted = await res.json();
+      flash(deleted + " supprimés ✓");
     } catch (err) {
       console.error("[BulkDel]", err);
       flash("⚠ Erreur suppression");
@@ -487,22 +487,23 @@ function CRMApp({ user, getToken, onLogout }) {
     }
   };
 
-  // ── Bulk assign to list ──
+  // ── Bulk assign to list (via Supabase RPC — single server-side operation) ──
   const bulkAssign = async (cat) => {
     const ids = [...selected];
     setLeads((prev) => prev.map((l) => (selected.has(l.id) ? { ...l, category: cat, updatedAt: today() } : l)));
     setSelected(new Set());
     setShowListPicker(false);
     flash(`${ids.length} → ${cat}...`);
-    const tk = getToken();
     try {
-      const CHUNK = 200;
-      for (let i = 0; i < ids.length; i += CHUNK) {
-        const chunk = ids.slice(i, i + CHUNK);
-        const idList = chunk.map((id) => `"${id}"`).join(",");
-        await sbFetch("leads", { method: "PATCH", body: { category: cat, updated_at: today() }, query: `?id=in.(${idList})` }, tk);
-      }
-      flash(`${ids.length} → ${cat} ✓`);
+      const tk = getToken();
+      const res = await fetch(`${SB_URL}/rest/v1/rpc/bulk_assign_leads`, {
+        method: "POST",
+        headers: { apikey: SB_KEY, Authorization: `Bearer ${tk}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ lead_ids: ids, new_category: cat }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const updated = await res.json();
+      flash(`${updated} → ${cat} ✓`);
     } catch (err) {
       console.error("[BulkAssign]", err);
       flash("⚠ Erreur assignation");
