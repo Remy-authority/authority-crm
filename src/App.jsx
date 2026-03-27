@@ -469,11 +469,21 @@ function CRMApp({ user, getToken, onLogout }) {
     const ids = [...selected];
     setLeads((prev) => prev.filter((l) => !selected.has(l.id)));
     setSelected(new Set());
-    flash(ids.length + " supprimés");
+    flash(ids.length + " supprimés...");
     const tk = getToken();
-    for (const id of ids) {
-      try { await sbFetch("leads", { method: "DELETE", query: `?id=eq.${id}` }, tk); }
-      catch (err) { console.error("[BulkDel]", id, err); }
+    try {
+      // Supabase accepts comma-separated ids with 'in' operator — single request
+      const CHUNK = 200;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
+        const idList = chunk.map((id) => `"${id}"`).join(",");
+        await sbFetch("leads", { method: "DELETE", query: `?id=in.(${idList})` }, tk);
+      }
+      flash(ids.length + " supprimés ✓");
+    } catch (err) {
+      console.error("[BulkDel]", err);
+      flash("⚠ Erreur suppression");
+      await loadData();
     }
   };
 
@@ -485,15 +495,19 @@ function CRMApp({ user, getToken, onLogout }) {
     setShowListPicker(false);
     flash(`${ids.length} → ${cat}...`);
     const tk = getToken();
-    let ok = 0, fail = 0;
-    for (const id of ids) {
-      try {
-        await sbFetch("leads", { method: "PATCH", body: { category: cat, updated_at: today() }, query: `?id=eq.${id}` }, tk);
-        ok++;
-      } catch (err) { console.error("[BulkAssign]", id, err); fail++; }
+    try {
+      const CHUNK = 200;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
+        const idList = chunk.map((id) => `"${id}"`).join(",");
+        await sbFetch("leads", { method: "PATCH", body: { category: cat, updated_at: today() }, query: `?id=in.(${idList})` }, tk);
+      }
+      flash(`${ids.length} → ${cat} ✓`);
+    } catch (err) {
+      console.error("[BulkAssign]", err);
+      flash("⚠ Erreur assignation");
+      await loadData();
     }
-    await loadData();
-    flash(`${ok} → ${cat}${fail ? ` · ${fail} erreurs` : ""} ✓`);
   };
 
   // ── CSV Import ──
