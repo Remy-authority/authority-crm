@@ -16,17 +16,22 @@ const sbHeaders = (token) => ({
 const sbFetch = async (table, opts = {}, token) => {
   const { method = "GET", body, query = "" } = opts;
   const url = `${SUPABASE_URL}/rest/v1/${table}${query}`;
-  const hdrs = { ...sbHeaders(token) };
+  const hdrs = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": `Bearer ${token || SUPABASE_KEY}`,
+    "Content-Type": "application/json"
+  };
   if (method === "GET") {
     hdrs["Range"] = "0-9999";
-    hdrs["Prefer"] = "count=exact";
+  } else {
+    hdrs["Prefer"] = "return=representation";
   }
   const res = await fetch(url, {
     method,
     headers: hdrs,
     ...(body ? { body: JSON.stringify(body) } : {})
   });
-  if (!res.ok && res.status !== 206) { const err = await res.text(); console.error("Supabase error:", err); throw new Error(err); }
+  if (!res.ok && res.status !== 206) { const err = await res.text(); console.error("Supabase error:", method, table, query, err); throw new Error(err); }
   const text = await res.text();
   return text ? JSON.parse(text) : [];
 };
@@ -333,7 +338,10 @@ function CRMApp({ user, onLogout }) {
       if ("valueAsset" in updates) dbUpdates.value_asset = updates.valueAsset;
       dbUpdates.updated_at = td();
       await sbFetch("leads", { method: "PATCH", body: dbUpdates, query: `?id=eq.${id}` }, user.token);
-    } catch (err) { console.error("Save error:", err); flash("Erreur sauvegarde"); }
+    } catch (err) {
+      console.error("Save error:", err);
+      flash("⚠ Sauvegarde échouée — reconnecte-toi");
+    }
     setSaving(false);
   };
 
@@ -380,16 +388,21 @@ function CRMApp({ user, onLogout }) {
   const bulkList = async (cat) => {
     const ids = [...selected]; const sz = ids.length;
     setLeads(prev => prev.map(l => selected.has(l.id) ? { ...l, category: cat } : l));
-    setSelected(new Set()); setShowListPicker(false); flash(sz + " → " + cat);
-    try {
-      // Update all selected leads in one request per batch
-      const batchSize = 100;
-      for (let i = 0; i < ids.length; i += batchSize) {
-        const batchIds = ids.slice(i, i + batchSize);
-        const idFilter = batchIds.map(id => `id.eq.${id}`).join(",");
-        await sbFetch("leads", { method: "PATCH", body: { category: cat, updated_at: td() }, query: `?or=(${idFilter})` }, user.token);
+    setSelected(new Set()); setShowListPicker(false);
+    flash("Assignation en cours... " + sz + " leads");
+    let ok = 0, fail = 0;
+    for (const id of ids) {
+      try {
+        await sbFetch("leads", { method: "PATCH", body: { category: cat, updated_at: td() }, query: `?id=eq.${id}` }, user.token);
+        ok++;
+      } catch (err) {
+        console.error("Bulk list error for", id, err);
+        fail++;
       }
-    } catch (err) { console.error("Bulk list error:", err); flash("Erreur assignation liste"); }
+    }
+    flash(ok + " → " + cat + (fail ? " · " + fail + " erreurs" : "") + " ✓");
+    // Reload from Supabase to make sure UI matches reality
+    await loadData();
   };
 
   const handleCSV = (e) => {
