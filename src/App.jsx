@@ -286,7 +286,7 @@ function CRMApp({ user, onLogout }) {
     try {
       const userFilter = isAdmin ? "" : `&user_id=eq.${user.id}`;
       const [dbLeads, dbCats] = await Promise.all([
-        sbFetch("leads", { query: `?select=*&order=created_at.desc${userFilter}` }, user.token),
+        sbFetch("leads", { query: `?select=*&order=created_at.desc&limit=10000${userFilter}` }, user.token),
         sbFetch("categories", { query: "?select=*&order=id.asc" }, user.token)
       ]);
       setLeads(dbLeads.map(l => ({
