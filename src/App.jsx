@@ -200,6 +200,7 @@ function LoginPage({ onLogin }) {
     try {
       const data = await sbAuth("token?grant_type=password", { email, password });
       const token = data.access_token;
+      const refreshToken = data.refresh_token;
       const userId = data.user?.id;
       // Get user profile
       const profiles = await sbFetch("user_profiles", { query: `?id=eq.${userId}&select=*` }, token);
@@ -207,9 +208,9 @@ function LoginPage({ onLogin }) {
       if (!profile) {
         // Auto-create partner profile on first login
         await sbFetch("user_profiles", { method: "POST", body: { id: userId, email, display_name: email.split("@")[0], role: "partner" } }, token);
-        onLogin({ id: userId, email, displayName: email.split("@")[0], role: "partner", token });
+        onLogin({ id: userId, email, displayName: email.split("@")[0], role: "partner", token, refreshToken });
       } else {
-        onLogin({ id: userId, email: profile.email, displayName: profile.display_name || email.split("@")[0], role: profile.role, token });
+        onLogin({ id: userId, email: profile.email, displayName: profile.display_name || email.split("@")[0], role: profile.role, token, refreshToken });
       }
     } catch (err) {
       setError(err.message === "Invalid login credentials" ? "Email ou mot de passe incorrect" : err.message);
@@ -380,7 +381,15 @@ function CRMApp({ user, onLogout }) {
     const ids = [...selected]; const sz = ids.length;
     setLeads(prev => prev.map(l => selected.has(l.id) ? { ...l, category: cat } : l));
     setSelected(new Set()); setShowListPicker(false); flash(sz + " → " + cat);
-    try { for (const id of ids) { await sbFetch("leads", { method: "PATCH", body: { category: cat, updated_at: td() }, query: `?id=eq.${id}` }, user.token); } } catch (err) { console.error("Bulk list error:", err); }
+    try {
+      // Update all selected leads in one request per batch
+      const batchSize = 100;
+      for (let i = 0; i < ids.length; i += batchSize) {
+        const batchIds = ids.slice(i, i + batchSize);
+        const idFilter = batchIds.map(id => `id.eq.${id}`).join(",");
+        await sbFetch("leads", { method: "PATCH", body: { category: cat, updated_at: td() }, query: `?or=(${idFilter})` }, user.token);
+      }
+    } catch (err) { console.error("Bulk list error:", err); flash("Erreur assignation liste"); }
   };
 
   const handleCSV = (e) => {
@@ -390,29 +399,46 @@ function CRMApp({ user, onLogout }) {
       try {
         const rows = parseCSV(ev.target.result);
         const ex = new Set(leads.map(l => normH(l.instagram)).filter(Boolean));
-        let added = 0, skip = 0; const nl = [];
+        let added = 0, skip = 0, dbFailed = 0; const nl = [];
         rows.forEach(r => {
           const h = r.instagram || r.handle || ""; const n = normH(h);
           if (n && ex.has(n)) { skip++; return; }
           if (n) ex.add(n);
+          const cat = r.category || r.liste || r.list || "";
           nl.push({
             id: gid(), name: r.name || r.nom || "Sans nom",
             instagram: h.startsWith("@") ? h : h ? "@" + h : "",
-            category: r.category || cats[0] || "", source: (r.source || "").toLowerCase().includes("inbound") ? "inbound" : "outbound",
+            category: cat, source: (r.source || "").toLowerCase().includes("inbound") ? "inbound" : "outbound",
             stage: r.stage || r.statut || "new", notes: r.notes || "", owner: r.owner || user.displayName,
             lastMsgDate: r.lastmsgdate || "", createdAt: r.created || td(), updatedAt: td(),
             valueAsset: (r.valueasset || "").toLowerCase() === "yes", userId: user.id
           });
           added++;
         });
-        setLeads(prev => [...nl, ...prev]); setShowImport(false);
-        flash(added + " importés" + (skip ? " · " + skip + " doublons" : "") + " ✓");
+        // Insert to Supabase FIRST, then update UI with only successful inserts
+        setShowImport(false);
+        flash("Import en cours... " + added + " leads");
+        const successLeads = [];
         const batchSize = 50;
         for (let i = 0; i < nl.length; i += batchSize) {
-          const batch = nl.slice(i, i + batchSize).map(toDb);
-          await sbFetch("leads", { method: "POST", body: batch }, user.token);
+          const batch = nl.slice(i, i + batchSize);
+          try {
+            await sbFetch("leads", { method: "POST", body: batch.map(toDb) }, user.token);
+            successLeads.push(...batch);
+          } catch (err) {
+            // Try inserting one by one to skip only the duplicates
+            for (const lead of batch) {
+              try {
+                await sbFetch("leads", { method: "POST", body: toDb(lead) }, user.token);
+                successLeads.push(lead);
+              } catch { dbFailed++; }
+            }
+          }
         }
-      } catch { flash("Erreur CSV"); }
+        // Only add to UI the leads that were actually saved to Supabase
+        setLeads(prev => [...successLeads, ...prev]);
+        flash(successLeads.length + " importés" + (skip ? " · " + skip + " doublons ignorés" : "") + (dbFailed ? " · " + dbFailed + " rejetés par la base" : "") + " ✓");
+      } catch (err) { console.error("CSV error:", err); flash("Erreur CSV : " + err.message); }
     };
     reader.readAsText(file); e.target.value = "";
   };
@@ -825,6 +851,27 @@ export default function AuthorityCRM() {
       try { setUser(JSON.parse(saved)); } catch { sessionStorage.removeItem("authority-crm-session"); }
     }
   }, []);
+
+  // Auto-refresh token every 45 minutes
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+          method: "POST",
+          headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: user.refreshToken })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const updated = { ...user, token: data.access_token, refreshToken: data.refresh_token };
+          setUser(updated);
+          sessionStorage.setItem("authority-crm-session", JSON.stringify(updated));
+        }
+      } catch (err) { console.error("Token refresh error:", err); }
+    }, 45 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [user]);
 
   const handleLogin = (userData) => {
     setUser(userData);
