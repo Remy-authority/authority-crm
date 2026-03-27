@@ -404,7 +404,7 @@ function CRMApp({ user, onLogout }) {
           const h = r.instagram || r.handle || ""; const n = normH(h);
           if (n && ex.has(n)) { skip++; return; }
           if (n) ex.add(n);
-          const cat = r.category || r.liste || r.list || "";
+          const cat = r.category || r.liste || r.list || fCat || "";
           nl.push({
             id: gid(), name: r.name || r.nom || "Sans nom",
             instagram: h.startsWith("@") ? h : h ? "@" + h : "",
