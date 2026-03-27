@@ -18,7 +18,7 @@ const sbFetch = async (table, opts = {}, token) => {
   const url = `${SUPABASE_URL}/rest/v1/${table}${query}`;
   const res = await fetch(url, {
     method,
-    headers: sbHeaders(token),
+    headers: { ...sbHeaders(token), "Range": "0-9999" },
     ...(body ? { body: JSON.stringify(body) } : {})
   });
   if (!res.ok) { const err = await res.text(); console.error("Supabase error:", err); throw new Error(err); }
