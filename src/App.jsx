@@ -284,12 +284,21 @@ function CRMApp({ user, onLogout }) {
   // ── Data Loading ──
   const loadData = useCallback(async () => {
     try {
-      const userFilter = isAdmin ? "" : `&user_id=eq.${user.id}`;
-      const [dbLeads, dbCats] = await Promise.all([
-        sbFetch("leads", { query: `?select=*&order=created_at.desc&limit=10000${userFilter}` }, user.token),
-        sbFetch("categories", { query: "?select=*&order=id.asc" }, user.token)
-      ]);
-      setLeads(dbLeads.map(l => ({
+      // Load all leads in pages of 1000
+      let allLeads = [];
+      let from = 0;
+      const pageSize = 1000;
+      while (true) {
+        const userFilter = isAdmin ? "" : `&user_id=eq.${user.id}`;
+        const batch = await sbFetch("leads", { 
+          query: `?select=*&order=created_at.desc&offset=${from}&limit=${pageSize}${userFilter}` 
+        }, user.token);
+        allLeads = allLeads.concat(batch);
+        if (batch.length < pageSize) break;
+        from += pageSize;
+      }
+      const dbCats = await sbFetch("categories", { query: "?select=*&order=id.asc" }, user.token);
+      setLeads(allLeads.map(l => ({
         id: l.id, name: l.name, instagram: l.instagram, category: l.category,
         source: l.source, stage: l.stage, notes: l.notes, owner: l.owner,
         lastMsgDate: l.last_msg_date, valueAsset: l.value_asset,
@@ -302,8 +311,6 @@ function CRMApp({ user, onLogout }) {
     }
     setLoading(false);
   }, [isAdmin, user.id, user.token]);
-
-  useEffect(() => { loadData(); }, [loadData]);
 
   const toDb = (l) => ({
     id: l.id, name: l.name, instagram: l.instagram, category: l.category,
