@@ -16,12 +16,17 @@ const sbHeaders = (token) => ({
 const sbFetch = async (table, opts = {}, token) => {
   const { method = "GET", body, query = "" } = opts;
   const url = `${SUPABASE_URL}/rest/v1/${table}${query}`;
+  const hdrs = { ...sbHeaders(token) };
+  if (method === "GET") {
+    hdrs["Range"] = "0-9999";
+    hdrs["Prefer"] = "count=exact";
+  }
   const res = await fetch(url, {
     method,
-    headers: { ...sbHeaders(token), "Range": "0-9999" },
+    headers: hdrs,
     ...(body ? { body: JSON.stringify(body) } : {})
   });
-  if (!res.ok) { const err = await res.text(); console.error("Supabase error:", err); throw new Error(err); }
+  if (!res.ok && res.status !== 206) { const err = await res.text(); console.error("Supabase error:", err); throw new Error(err); }
   const text = await res.text();
   return text ? JSON.parse(text) : [];
 };
@@ -284,21 +289,12 @@ function CRMApp({ user, onLogout }) {
   // ── Data Loading ──
   const loadData = useCallback(async () => {
     try {
-      // Load all leads in pages of 1000
-      let allLeads = [];
-      let from = 0;
-      const pageSize = 1000;
-      while (true) {
-        const userFilter = isAdmin ? "" : `&user_id=eq.${user.id}`;
-        const batch = await sbFetch("leads", { 
-          query: `?select=*&order=created_at.desc&offset=${from}&limit=${pageSize}${userFilter}` 
-        }, user.token);
-        allLeads = allLeads.concat(batch);
-        if (batch.length < pageSize) break;
-        from += pageSize;
-      }
-      const dbCats = await sbFetch("categories", { query: "?select=*&order=id.asc" }, user.token);
-      setLeads(allLeads.map(l => ({
+      const userFilter = isAdmin ? "" : `&user_id=eq.${user.id}`;
+      const [dbLeads, dbCats] = await Promise.all([
+        sbFetch("leads", { query: `?select=*&order=created_at.desc${userFilter}` }, user.token),
+        sbFetch("categories", { query: "?select=*&order=id.asc" }, user.token)
+      ]);
+      setLeads(dbLeads.map(l => ({
         id: l.id, name: l.name, instagram: l.instagram, category: l.category,
         source: l.source, stage: l.stage, notes: l.notes, owner: l.owner,
         lastMsgDate: l.last_msg_date, valueAsset: l.value_asset,
