@@ -258,7 +258,7 @@ function LoginPage({ onLogin }) {
 // ══════════════════════════════════════
 // MAIN CRM
 // ══════════════════════════════════════
-function CRMApp({ user, onLogout }) {
+function CRMApp({ user, getToken, onLogout }) {
   const [leads, setLeads] = useState([]);
   const [cats, setCats] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -297,8 +297,8 @@ function CRMApp({ user, onLogout }) {
     try {
       const userFilter = isAdmin ? "" : `&user_id=eq.${user.id}`;
       const [dbLeads, dbCats] = await Promise.all([
-        sbFetch("leads", { query: `?select=*&order=created_at.desc${userFilter}` }, user.token),
-        sbFetch("categories", { query: "?select=*&order=id.asc" }, user.token)
+        sbFetch("leads", { query: `?select=*&order=created_at.desc${userFilter}` }, getToken()),
+        sbFetch("categories", { query: "?select=*&order=id.asc" }, getToken())
       ]);
       setLeads(dbLeads.map(l => ({
         id: l.id, name: l.name, instagram: l.instagram, category: l.category,
@@ -312,7 +312,7 @@ function CRMApp({ user, onLogout }) {
       flash("Erreur de chargement");
     }
     setLoading(false);
-  }, [isAdmin, user.id, user.token]);
+  }, [isAdmin, user.id, getToken]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -337,7 +337,7 @@ function CRMApp({ user, onLogout }) {
       if ("lastMsgDate" in updates) dbUpdates.last_msg_date = updates.lastMsgDate;
       if ("valueAsset" in updates) dbUpdates.value_asset = updates.valueAsset;
       dbUpdates.updated_at = td();
-      await sbFetch("leads", { method: "PATCH", body: dbUpdates, query: `?id=eq.${id}` }, user.token);
+      await sbFetch("leads", { method: "PATCH", body: dbUpdates, query: `?id=eq.${id}` }, getToken());
     } catch (err) {
       console.error("Save error:", err);
       flash("⚠ Sauvegarde échouée — reconnecte-toi");
@@ -358,7 +358,7 @@ function CRMApp({ user, onLogout }) {
     setLeads(prev => [newLead, ...prev]);
     setForm({ name: "", instagram: "", category: cats[0] || "", source: "outbound", stage: "new", notes: "", owner: user.displayName, lastMsgDate: "", valueAsset: false });
     setDup(null); setShowAdd(false); flash("Lead ajouté ✓");
-    try { await sbFetch("leads", { method: "POST", body: toDb(newLead) }, user.token); } catch (err) { console.error("Insert error:", err); }
+    try { await sbFetch("leads", { method: "POST", body: toDb(newLead) }, getToken()); } catch (err) { console.error("Insert error:", err); }
   };
 
   const updL = (id, u) => {
@@ -372,7 +372,7 @@ function CRMApp({ user, onLogout }) {
     setLeads(prev => prev.filter(l => l.id !== id));
     if (sel?.id === id) { setSel(null); setView("list"); }
     flash("Supprimé");
-    try { await sbFetch("leads", { method: "DELETE", query: `?id=eq.${id}` }, user.token); } catch (err) { console.error("Delete error:", err); }
+    try { await sbFetch("leads", { method: "DELETE", query: `?id=eq.${id}` }, getToken()); } catch (err) { console.error("Delete error:", err); }
   };
 
   const toggleSel = id => { const s = new Set(selected); if (s.has(id)) s.delete(id); else s.add(id); setSelected(s); };
@@ -382,7 +382,7 @@ function CRMApp({ user, onLogout }) {
     const ids = [...selected]; const sz = ids.length;
     setLeads(prev => prev.filter(l => !selected.has(l.id)));
     setSelected(new Set()); flash(sz + " supprimés");
-    try { for (const id of ids) { await sbFetch("leads", { method: "DELETE", query: `?id=eq.${id}` }, user.token); } } catch (err) { console.error("Bulk delete error:", err); }
+    try { for (const id of ids) { await sbFetch("leads", { method: "DELETE", query: `?id=eq.${id}` }, getToken()); } } catch (err) { console.error("Bulk delete error:", err); }
   };
 
   const bulkList = async (cat) => {
@@ -393,7 +393,7 @@ function CRMApp({ user, onLogout }) {
     let ok = 0, fail = 0;
     for (const id of ids) {
       try {
-        await sbFetch("leads", { method: "PATCH", body: { category: cat, updated_at: td() }, query: `?id=eq.${id}` }, user.token);
+        await sbFetch("leads", { method: "PATCH", body: { category: cat, updated_at: td() }, query: `?id=eq.${id}` }, getToken());
         ok++;
       } catch (err) {
         console.error("Bulk list error for", id, err);
@@ -417,7 +417,7 @@ function CRMApp({ user, onLogout }) {
           const h = r.instagram || r.handle || ""; const n = normH(h);
           if (n && ex.has(n)) { skip++; return; }
           if (n) ex.add(n);
-          const cat = r.category || r.liste || r.list || fCat || "";
+          const cat = fCat || r.category || r.liste || r.list || "";
           nl.push({
             id: gid(), name: r.name || r.nom || "Sans nom",
             instagram: h.startsWith("@") ? h : h ? "@" + h : "",
@@ -436,13 +436,13 @@ function CRMApp({ user, onLogout }) {
         for (let i = 0; i < nl.length; i += batchSize) {
           const batch = nl.slice(i, i + batchSize);
           try {
-            await sbFetch("leads", { method: "POST", body: batch.map(toDb) }, user.token);
+            await sbFetch("leads", { method: "POST", body: batch.map(toDb) }, getToken());
             successLeads.push(...batch);
           } catch (err) {
             // Try inserting one by one to skip only the duplicates
             for (const lead of batch) {
               try {
-                await sbFetch("leads", { method: "POST", body: toDb(lead) }, user.token);
+                await sbFetch("leads", { method: "POST", body: toDb(lead) }, getToken());
                 successLeads.push(lead);
               } catch { dbFailed++; }
             }
@@ -471,11 +471,11 @@ function CRMApp({ user, onLogout }) {
   const addCat = async () => {
     const c = newCat.trim(); if (!c || cats.includes(c)) return;
     setCats(prev => [...prev, c]); setNewCat("");
-    try { await sbFetch("categories", { method: "POST", body: { name: c } }, user.token); } catch (err) { console.error("Add cat error:", err); }
+    try { await sbFetch("categories", { method: "POST", body: { name: c } }, getToken()); } catch (err) { console.error("Add cat error:", err); }
   };
   const delCat = async (c) => {
     setCats(prev => prev.filter(x => x !== c));
-    try { await sbFetch("categories", { method: "DELETE", query: `?name=eq.${encodeURIComponent(c)}` }, user.token); } catch (err) { console.error("Del cat error:", err); }
+    try { await sbFetch("categories", { method: "DELETE", query: `?name=eq.${encodeURIComponent(c)}` }, getToken()); } catch (err) { console.error("Del cat error:", err); }
   };
   const renameCat = async (old, nw) => {
     const n = nw.trim(); if (!n || cats.includes(n)) return;
@@ -483,8 +483,8 @@ function CRMApp({ user, onLogout }) {
     setLeads(prev => prev.map(l => l.category === old ? { ...l, category: n } : l));
     setEditCat(null);
     try {
-      await sbFetch("categories", { method: "PATCH", body: { name: n }, query: `?name=eq.${encodeURIComponent(old)}` }, user.token);
-      await sbFetch("leads", { method: "PATCH", body: { category: n, updated_at: td() }, query: `?category=eq.${encodeURIComponent(old)}` }, user.token);
+      await sbFetch("categories", { method: "PATCH", body: { name: n }, query: `?name=eq.${encodeURIComponent(old)}` }, getToken());
+      await sbFetch("leads", { method: "PATCH", body: { category: n, updated_at: td() }, query: `?category=eq.${encodeURIComponent(old)}` }, getToken());
     } catch (err) { console.error("Rename cat error:", err); }
   };
 
@@ -650,7 +650,7 @@ function CRMApp({ user, onLogout }) {
         <div className="flex gap-1.5">
           <button onClick={exportCSV} className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[9px] font-medium hover:bg-white/5" style={{ border: "1px solid #1e1e3e", color: "#7777a0" }}><Download size={10} /> Export</button>
           <button onClick={() => setShowImport(true)} className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[9px] font-medium hover:bg-white/5" style={{ border: "1px solid #1e1e3e", color: "#7777a0" }}><Upload size={10} /> Import</button>
-          <button onClick={() => { setShowAdd(true); setDup(null); }} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[9px] font-semibold text-white hover:brightness-110" style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)" }}><Plus size={11} /> Nouveau</button>
+          <button onClick={() => { setForm(f => ({ ...f, category: fCat || f.category })); setShowAdd(true); setDup(null); }} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[9px] font-semibold text-white hover:brightness-110" style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)" }}><Plus size={11} /> Nouveau</button>
         </div>
       </div>
       {selected.size > 0 && (
@@ -812,6 +812,7 @@ function CRMApp({ user, onLogout }) {
       <Modal open={showImport} onClose={() => setShowImport(false)} title="Import CSV">
         <div className="space-y-3">
           <p className="text-[10px]" style={{ color: "#7777a0" }}>Colonnes: name, instagram, category, source, stage, notes, owner, lastmsgdate, valueasset</p>
+          {fCat && <div className="rounded-lg px-3 py-2" style={{ backgroundColor: "#6366f110", border: "1px solid #6366f130" }}><p className="text-[10px] font-semibold" style={{ color: "#a5b4fc" }}>Les leads seront importés dans : <span className="text-white">{fCat}</span></p></div>}
           <input ref={fileRef} type="file" accept=".csv" onChange={handleCSV} className="hidden" />
           <button onClick={() => fileRef.current?.click()} className="w-full py-2 rounded-lg text-xs font-bold text-white hover:brightness-110 flex items-center justify-center gap-2" style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)" }}><Upload size={13} /> CSV</button>
         </div>
@@ -856,46 +857,90 @@ function CRMApp({ user, onLogout }) {
 // ══════════════════════════════════════
 export default function AuthorityCRM() {
   const [user, setUser] = useState(null);
+  const tokenRef = useRef(null);
+  const refreshRef = useRef(null);
+
+  // Keep refs in sync with user state
+  useEffect(() => {
+    if (user) {
+      tokenRef.current = user.token;
+      refreshRef.current = user.refreshToken;
+    }
+  }, [user]);
 
   // Check for saved session
   useEffect(() => {
     const saved = sessionStorage.getItem("authority-crm-session");
     if (saved) {
-      try { setUser(JSON.parse(saved)); } catch { sessionStorage.removeItem("authority-crm-session"); }
+      try {
+        const parsed = JSON.parse(saved);
+        setUser(parsed);
+        tokenRef.current = parsed.token;
+        refreshRef.current = parsed.refreshToken;
+      } catch { sessionStorage.removeItem("authority-crm-session"); }
     }
   }, []);
 
-  // Auto-refresh token every 45 minutes
+  // Auto-refresh token every 50 minutes (JWT expires at 60min)
+  // Uses refs to avoid re-creating interval on every user state change
   useEffect(() => {
     if (!user) return;
-    const interval = setInterval(async () => {
+
+    const doRefresh = async () => {
       try {
         const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
           method: "POST",
           headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
-          body: JSON.stringify({ refresh_token: user.refreshToken })
+          body: JSON.stringify({ refresh_token: refreshRef.current })
         });
         if (res.ok) {
           const data = await res.json();
-          const updated = { ...user, token: data.access_token, refreshToken: data.refresh_token };
-          setUser(updated);
-          sessionStorage.setItem("authority-crm-session", JSON.stringify(updated));
+          tokenRef.current = data.access_token;
+          refreshRef.current = data.refresh_token;
+          setUser(prev => {
+            const updated = { ...prev, token: data.access_token, refreshToken: data.refresh_token };
+            sessionStorage.setItem("authority-crm-session", JSON.stringify(updated));
+            return updated;
+          });
+          console.log("[Auth] Token refreshed OK");
+        } else {
+          console.error("[Auth] Refresh failed, status:", res.status);
         }
-      } catch (err) { console.error("Token refresh error:", err); }
-    }, 45 * 60 * 1000);
+      } catch (err) { console.error("[Auth] Token refresh error:", err); }
+    };
+
+    // Refresh immediately if token might be old (e.g., tab was inactive)
+    const saved = sessionStorage.getItem("authority-crm-session");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        // If we have a refresh token, do a proactive refresh on mount
+        if (parsed.refreshToken) doRefresh();
+      } catch {}
+    }
+
+    const interval = setInterval(doRefresh, 50 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [user]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!user]);
+
+  // getToken always returns the freshest token
+  const getToken = useCallback(() => tokenRef.current, []);
 
   const handleLogin = (userData) => {
+    tokenRef.current = userData.token;
+    refreshRef.current = userData.refreshToken;
     setUser(userData);
     sessionStorage.setItem("authority-crm-session", JSON.stringify(userData));
   };
 
   const handleLogout = () => {
     setUser(null);
+    tokenRef.current = null;
+    refreshRef.current = null;
     sessionStorage.removeItem("authority-crm-session");
   };
 
   if (!user) return <LoginPage onLogin={handleLogin} />;
-  return <CRMApp user={user} onLogout={handleLogout} />;
+  return <CRMApp user={user} getToken={getToken} onLogout={handleLogout} />;
 }
